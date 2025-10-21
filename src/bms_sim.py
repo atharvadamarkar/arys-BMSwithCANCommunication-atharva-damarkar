@@ -1,30 +1,36 @@
-
-
-
 from models import BatteryPack, FaultMonitor
 import matplotlib.pyplot as plt
 
 def simulate_pack(duration_sec=100, dt=1):
     pack = BatteryPack()
-    monitor = FaultMonitor()
+    monitor = FaultMonitor(overcurrent=2.0)  # Example threshold: 2A
 
     time_log, voltage_log, soc_log = [], [], []
-    shutdown_times, cooling_times, balancing_times = [], [], []
+    shutdown_times = []  # store tuples: (time, reason)
+    cooling_times, balancing_times = [], []
 
     for t in range(0, duration_sec, dt):
-        current = 1.0
+        # Simulate current (overcurrent at t=50s for demo)
+        current = 3.0 if t == 50 else 1.0
         pack.update(current, dt)
 
-        # Check faults
-        faults = monitor.check(pack)
+        # Check faults including overcurrent
+        faults = monitor.check(pack, pack_current=current)
         if faults:
             print(f"Time {t}s: Faults -> {faults}")
 
+            # Determine shutdown reason if applicable
+            shutdown_reason = None
+            if any("Overcurrent" in f for f in faults):
+                shutdown_reason = "Overcurrent"
+            elif any("Undervoltage" in f or "Overvoltage" in f for f in faults):
+                shutdown_reason = "Over/Undervoltage"
+
             # Trigger actions
-            if any("Undervoltage" in f or "Overvoltage" in f for f in faults):
-                if pack.active:  # only once
-                    monitor.shutdown(pack)
-                    shutdown_times.append(t)
+            if shutdown_reason and pack.active:
+                monitor.shutdown(pack)
+                shutdown_times.append((t, shutdown_reason))
+
             if "SOC Imbalance Detected" in faults:
                 monitor.balancing(pack)
                 balancing_times.append(t)
@@ -38,17 +44,19 @@ def simulate_pack(duration_sec=100, dt=1):
 
         time_log.append(t)
         voltage_log.append(pack.pack_voltage())
-        soc_log.append(sum(cell.soc for cell in pack.cells)/4)
+        soc_log.append(sum(cell.soc for cell in pack.cells)/len(pack.cells))
 
     # Plot pack voltage and average SOC
     plt.figure(figsize=(12,6))
     plt.plot(time_log, voltage_log, label='Pack Voltage (V)')
     plt.plot(time_log, soc_log, label='Average SOC (%)')
 
-    # Mark events
-    for t in shutdown_times:
+    # Mark shutdowns with reason
+    for t, reason in shutdown_times:
         plt.axvline(t, color='red', linestyle='--', label='Shutdown')
-        plt.text(t, max(voltage_log), 'Shutdown', color='red', rotation=90, va='top')
+        plt.text(t, max(voltage_log), f'Shutdown ({reason})', color='red', rotation=90, va='top')
+
+    # Mark cooling and balancing events
     for t in cooling_times:
         plt.scatter(t, voltage_log[t], color='blue', marker='o', s=80, label='Cooling')
     for t in balancing_times:
